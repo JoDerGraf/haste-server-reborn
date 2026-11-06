@@ -1,0 +1,11 @@
+.git
+.github
+node_modules
+data
+test
+*.md
+!about.md
+npm-debug.log
+.DS_Store
+graphify-out
+docs

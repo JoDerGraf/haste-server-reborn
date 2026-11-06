@@ -1,399 +1,340 @@
-/* global $, hljs, window, document */
+/* global hljs */
+(function () {
+  'use strict';
 
-///// represents a single document
+  const $ = (selector) => document.querySelector(selector);
+  const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
-var haste_document = function() {
-  this.locked = false;
-};
-
-// Escapes HTML tag characters
-haste_document.prototype.htmlEscape = function(s) {
-  return s
+  const htmlEscape = (s) => s
     .replace(/&/g, '&amp;')
-    .replace(/>/g, '&gt;')
     .replace(/</g, '&lt;')
-    .replace(/"/g, '&quot;');
-};
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 
-// Get this document from the server and lock it here
-haste_document.prototype.load = function(key, callback, lang) {
-  var _this = this;
-  $.ajax('/documents/' + key, {
-    type: 'get',
-    dataType: 'json',
-    success: function(res) {
-      _this.locked = true;
-      _this.key = key;
-      _this.data = res.data;
+  // highlight.js output is HTML-escaped; plain text is escaped by us.
+  function highlight(data, lang) {
+    if (lang === 'txt' || lang === 'plaintext') {
+      return { value: htmlEscape(data), language: lang };
+    }
+    if (lang && hljs.getLanguage(lang)) {
+      return hljs.highlight(data, { language: lang, ignoreIllegals: true });
+    }
+    return hljs.highlightAuto(data);
+  }
+
+  ///// represents a single document
+
+  class HasteDocument {
+    constructor() {
+      this.locked = false;
+    }
+
+    // Get this document from the server and lock it here
+    async load(key, lang) {
+      let body;
       try {
-        var high;
-        if (lang === 'txt') {
-          high = { value: _this.htmlEscape(res.data) };
-        }
-        else if (lang) {
-          high = hljs.highlight(lang, res.data);
-        }
-        else {
-          high = hljs.highlightAuto(res.data);
-        }
-      } catch(err) {
-        // failed highlight, fall back on auto
-        high = hljs.highlightAuto(res.data);
+        const res = await fetch('/documents/' + encodeURIComponent(key), {
+          headers: { Accept: 'application/json' }
+        });
+        if (!res.ok) return null;
+        body = await res.json();
+      } catch {
+        return null;
       }
-      callback({
+      this.locked = true;
+      this.key = key;
+      this.data = body.data;
+      const high = highlight(body.data, lang);
+      return {
         value: high.value,
         key: key,
         language: high.language || lang,
-        lineCount: res.data.split('\n').length
-      });
-    },
-    error: function() {
-      callback(false);
+        lineCount: body.data.split('\n').length
+      };
     }
-  });
-};
 
-// Save this document to the server and lock it here
-haste_document.prototype.save = function(data, callback) {
-  if (this.locked) {
-    return false;
-  }
-  this.data = data;
-  var _this = this;
-  $.ajax('/documents', {
-    type: 'post',
-    data: data,
-    dataType: 'json',
-    contentType: 'application/json; charset=utf-8',
-    success: function(res) {
-      _this.locked = true;
-      _this.key = res.key;
-      var high = hljs.highlightAuto(data);
-      callback(null, {
+    // Save this document to the server and lock it here
+    async save(data) {
+      if (this.locked) return null;
+      this.data = data;
+      let res, body;
+      try {
+        res = await fetch('/documents', {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain; charset=utf-8', Accept: 'application/json' },
+          body: data
+        });
+        body = await res.json();
+      } catch {
+        throw new Error('Something went wrong!');
+      }
+      if (!res.ok) throw new Error(body.message || 'Something went wrong!');
+
+      this.locked = true;
+      this.key = body.key;
+      const high = hljs.highlightAuto(data);
+      return {
         value: high.value,
-        key: res.key,
+        key: body.key,
         language: high.language,
         lineCount: data.split('\n').length
-      });
-    },
-    error: function(res) {
+      };
+    }
+  }
+
+  ///// represents the paste application
+
+  // Map of common extensions
+  // Note: this list does not need to include anything that IS its extension,
+  // due to the behavior of lookupTypeByExtension and lookupExtensionByType
+  const extensionMap = {
+    rb: 'ruby', py: 'python', pl: 'perl', php: 'php', scala: 'scala', go: 'go',
+    xml: 'xml', html: 'xml', htm: 'xml', css: 'css', js: 'javascript', vbs: 'vbscript',
+    lua: 'lua', pas: 'delphi', java: 'java', cpp: 'cpp', cc: 'cpp', m: 'objectivec',
+    vala: 'vala', sql: 'sql', sm: 'smalltalk', lisp: 'lisp', ini: 'ini',
+    diff: 'diff', bash: 'bash', sh: 'bash', tex: 'tex', erl: 'erlang', hs: 'haskell',
+    md: 'markdown', txt: '', coffee: 'coffee', json: 'json', swift: 'swift',
+    ts: 'typescript', rs: 'rust', kt: 'kotlin', cs: 'csharp', yml: 'yaml',
+    yaml: 'yaml', c: 'c', h: 'c', r: 'r', scss: 'scss', less: 'less',
+    graphql: 'graphql', mk: 'makefile', wasm: 'wasm', vb: 'vbnet'
+  };
+
+  class Haste {
+    constructor(appName, options) {
+      this.appName = appName;
+      this.options = options;
+      this.textarea = $('textarea');
+      this.box = $('#box');
+      this.code = $('#box code');
+      this.linenos = $('#linenos');
+      this.doc = new HasteDocument();
+      this.configureButtons();
+      this.configureShortcuts();
+      this.configureTabKey();
+      if (!options.twitter) $('#box2 .twitter').hidden = true;
+    }
+
+    // Set the page title - include the appName
+    setTitle(ext) {
+      document.title = ext ? this.appName + ' - ' + ext : this.appName;
+    }
+
+    // Show a message box
+    showMessage(msg, cls) {
+      const li = document.createElement('li');
+      li.className = cls || 'info';
+      li.textContent = msg;
+      $('#messages').prepend(li);
+      setTimeout(() => li.remove(), 3000);
+    }
+
+    lightKey() {
+      this.configureKey(['new', 'save']);
+    }
+
+    fullKey() {
+      this.configureKey(['new', 'duplicate', 'twitter', 'raw']);
+    }
+
+    // Set the key up for certain things to be enabled
+    configureKey(enable) {
+      for (const el of $$('#box2 .function')) {
+        el.classList.toggle('enabled', enable.some((cls) => el.classList.contains(cls)));
+      }
+    }
+
+    showEditor(value) {
+      this.box.hidden = true;
+      this.textarea.value = value || '';
+      this.textarea.hidden = false;
+      this.textarea.focus();
+    }
+
+    showDocument(ret) {
+      this.code.innerHTML = ret.value;
+      this.setTitle(ret.key);
+      this.fullKey();
+      this.textarea.value = '';
+      this.textarea.hidden = true;
+      this.box.hidden = false;
+      this.box.focus();
+      this.addLineNumbers(ret.lineCount);
+    }
+
+    // Remove the current document (if there is one) and set up for a new one
+    newDocument(hideHistory) {
+      this.doc = new HasteDocument();
+      if (!hideHistory) window.history.pushState(null, this.appName, '/');
+      this.setTitle();
+      this.lightKey();
+      this.showEditor('');
+      this.removeLineNumbers();
+    }
+
+    // Look up the extension preferred for a type
+    // If not found, return the type itself - which we'll place as the extension
+    lookupExtensionByType(type) {
+      for (const key in extensionMap) {
+        if (extensionMap[key] === type) return key;
+      }
+      return type;
+    }
+
+    // Look up the type for a given extension
+    // If not found, return the extension - which we'll attempt to use as the type
+    lookupTypeByExtension(ext) {
+      return extensionMap[ext] || ext;
+    }
+
+    addLineNumbers(lineCount) {
+      const lines = [];
+      for (let i = 1; i <= lineCount; i++) lines.push(i);
+      this.linenos.textContent = lines.join('\n');
+    }
+
+    removeLineNumbers() {
+      this.linenos.textContent = '>';
+    }
+
+    // Load a document and show it
+    async loadDocument(key) {
+      const parts = key.split('.', 2);
+      this.doc = new HasteDocument();
+      const ret = await this.doc.load(parts[0], this.lookupTypeByExtension(parts[1]));
+      if (ret) {
+        this.showDocument(ret);
+      } else {
+        this.newDocument();
+      }
+    }
+
+    // Duplicate the current document - only if locked
+    duplicateDocument() {
+      if (!this.doc.locked) return;
+      const currentData = this.doc.data;
+      this.newDocument();
+      this.textarea.value = currentData;
+    }
+
+    // Lock the current document
+    async lockDocument() {
+      let ret;
       try {
-        callback($.parseJSON(res.responseText));
-      }
-      catch (e) {
-        callback({message: 'Something went wrong!'});
-      }
-    }
-  });
-};
-
-///// represents the paste application
-
-var haste = function(appName, options) {
-  this.appName = appName;
-  this.$textarea = $('textarea');
-  this.$box = $('#box');
-  this.$code = $('#box code');
-  this.$linenos = $('#linenos');
-  this.options = options;
-  this.configureShortcuts();
-  this.configureButtons();
-  // If twitter is disabled, hide the button
-  if (!options.twitter) {
-    $('#box2 .twitter').hide();
-  }
-};
-
-// Set the page title - include the appName
-haste.prototype.setTitle = function(ext) {
-  var title = ext ? this.appName + ' - ' + ext : this.appName;
-  document.title = title;
-};
-
-// Show a message box
-haste.prototype.showMessage = function(msg, cls) {
-  var msgBox = $('<li class="'+(cls || 'info')+'">'+msg+'</li>');
-  $('#messages').prepend(msgBox);
-  setTimeout(function() {
-    msgBox.slideUp('fast', function() { $(this).remove(); });
-  }, 3000);
-};
-
-// Show the light key
-haste.prototype.lightKey = function() {
-  this.configureKey(['new', 'save']);
-};
-
-// Show the full key
-haste.prototype.fullKey = function() {
-  this.configureKey(['new', 'duplicate', 'twitter', 'raw']);
-};
-
-// Set the key up for certain things to be enabled
-haste.prototype.configureKey = function(enable) {
-  var $this, i = 0;
-  $('#box2 .function').each(function() {
-    $this = $(this);
-    for (i = 0; i < enable.length; i++) {
-      if ($this.hasClass(enable[i])) {
-        $this.addClass('enabled');
-        return true;
-      }
-    }
-    $this.removeClass('enabled');
-  });
-};
-
-// Remove the current document (if there is one)
-// and set up for a new one
-haste.prototype.newDocument = function(hideHistory) {
-  this.$box.hide();
-  this.doc = new haste_document();
-  if (!hideHistory) {
-    window.history.pushState(null, this.appName, '/');
-  }
-  this.setTitle();
-  this.lightKey();
-  this.$textarea.val('').show('fast', function() {
-    this.focus();
-  });
-  this.removeLineNumbers();
-};
-
-// Map of common extensions
-// Note: this list does not need to include anything that IS its extension,
-// due to the behavior of lookupTypeByExtension and lookupExtensionByType
-// Note: optimized for lookupTypeByExtension
-haste.extensionMap = {
-  rb: 'ruby', py: 'python', pl: 'perl', php: 'php', scala: 'scala', go: 'go',
-  xml: 'xml', html: 'xml', htm: 'xml', css: 'css', js: 'javascript', vbs: 'vbscript',
-  lua: 'lua', pas: 'delphi', java: 'java', cpp: 'cpp', cc: 'cpp', m: 'objectivec',
-  vala: 'vala', sql: 'sql', sm: 'smalltalk', lisp: 'lisp', ini: 'ini',
-  diff: 'diff', bash: 'bash', sh: 'bash', tex: 'tex', erl: 'erlang', hs: 'haskell',
-  md: 'markdown', txt: '', coffee: 'coffee', json: 'javascript',
-  swift: 'swift'
-};
-
-// Look up the extension preferred for a type
-// If not found, return the type itself - which we'll place as the extension
-haste.prototype.lookupExtensionByType = function(type) {
-  for (var key in haste.extensionMap) {
-    if (haste.extensionMap[key] === type) return key;
-  }
-  return type;
-};
-
-// Look up the type for a given extension
-// If not found, return the extension - which we'll attempt to use as the type
-haste.prototype.lookupTypeByExtension = function(ext) {
-  return haste.extensionMap[ext] || ext;
-};
-
-// Add line numbers to the document
-// For the specified number of lines
-haste.prototype.addLineNumbers = function(lineCount) {
-  var h = '';
-  for (var i = 0; i < lineCount; i++) {
-    h += (i + 1).toString() + '<br/>';
-  }
-  $('#linenos').html(h);
-};
-
-// Remove the line numbers
-haste.prototype.removeLineNumbers = function() {
-  $('#linenos').html('&gt;');
-};
-
-// Load a document and show it
-haste.prototype.loadDocument = function(key) {
-  // Split the key up
-  var parts = key.split('.', 2);
-  // Ask for what we want
-  var _this = this;
-  _this.doc = new haste_document();
-  _this.doc.load(parts[0], function(ret) {
-    if (ret) {
-      _this.$code.html(ret.value);
-      _this.setTitle(ret.key);
-      _this.fullKey();
-      _this.$textarea.val('').hide();
-      _this.$box.show().focus();
-      _this.addLineNumbers(ret.lineCount);
-    }
-    else {
-      _this.newDocument();
-    }
-  }, this.lookupTypeByExtension(parts[1]));
-};
-
-// Duplicate the current document - only if locked
-haste.prototype.duplicateDocument = function() {
-  if (this.doc.locked) {
-    var currentData = this.doc.data;
-    this.newDocument();
-    this.$textarea.val(currentData);
-  }
-};
-
-// Lock the current document
-haste.prototype.lockDocument = function() {
-  var _this = this;
-  this.doc.save(this.$textarea.val(), function(err, ret) {
-    if (err) {
-      _this.showMessage(err.message, 'error');
-    }
-    else if (ret) {
-      _this.$code.html(ret.value);
-      _this.setTitle(ret.key);
-      var file = '/' + ret.key;
-      if (ret.language) {
-        file += '.' + _this.lookupExtensionByType(ret.language);
-      }
-      window.history.pushState(null, _this.appName + '-' + ret.key, file);
-      _this.fullKey();
-      _this.$textarea.val('').hide();
-      _this.$box.show().focus();
-      _this.addLineNumbers(ret.lineCount);
-    }
-  });
-};
-
-haste.prototype.configureButtons = function() {
-  var _this = this;
-  this.buttons = [
-    {
-      $where: $('#box2 .save'),
-      label: 'Save',
-      shortcutDescription: 'control + s',
-      shortcut: function(evt) {
-        return evt.ctrlKey && (evt.keyCode === 83);
-      },
-      action: function() {
-        if (_this.$textarea.val().replace(/^\s+|\s+$/g, '') !== '') {
-          _this.lockDocument();
-        }
-      }
-    },
-    {
-      $where: $('#box2 .new'),
-      label: 'New',
-      shortcut: function(evt) {
-        return evt.ctrlKey && evt.keyCode === 78;
-      },
-      shortcutDescription: 'control + n',
-      action: function() {
-        _this.newDocument(!_this.doc.key);
-      }
-    },
-    {
-      $where: $('#box2 .duplicate'),
-      label: 'Duplicate & Edit',
-      shortcut: function(evt) {
-        return _this.doc.locked && evt.ctrlKey && evt.keyCode === 68;
-      },
-      shortcutDescription: 'control + d',
-      action: function() {
-        _this.duplicateDocument();
-      }
-    },
-    {
-      $where: $('#box2 .raw'),
-      label: 'Just Text',
-      shortcut: function(evt) {
-        return evt.ctrlKey && evt.shiftKey && evt.keyCode === 82;
-      },
-      shortcutDescription: 'control + shift + r',
-      action: function() {
-        window.location.href = '/raw/' + _this.doc.key;
-      }
-    },
-    {
-      $where: $('#box2 .twitter'),
-      label: 'Twitter',
-      shortcut: function(evt) {
-        return _this.options.twitter && _this.doc.locked && evt.shiftKey && evt.ctrlKey && evt.keyCode == 84;
-      },
-      shortcutDescription: 'control + shift + t',
-      action: function() {
-        window.open('https://twitter.com/share?url=' + encodeURI(window.location.href));
-      }
-    }
-  ];
-  for (var i = 0; i < this.buttons.length; i++) {
-    this.configureButton(this.buttons[i]);
-  }
-};
-
-haste.prototype.configureButton = function(options) {
-  // Handle the click action
-  options.$where.click(function(evt) {
-    evt.preventDefault();
-    if (!options.clickDisabled && $(this).hasClass('enabled')) {
-      options.action();
-    }
-  });
-  // Show the label
-  options.$where.mouseenter(function() {
-    $('#box3 .label').text(options.label);
-    $('#box3 .shortcut').text(options.shortcutDescription || '');
-    $('#box3').show();
-    $(this).append($('#pointer').remove().show());
-  });
-  // Hide the label
-  options.$where.mouseleave(function() {
-    $('#box3').hide();
-    $('#pointer').hide();
-  });
-};
-
-// Configure keyboard shortcuts for the textarea
-haste.prototype.configureShortcuts = function() {
-  var _this = this;
-  $(document.body).keydown(function(evt) {
-    var button;
-    for (var i = 0 ; i < _this.buttons.length; i++) {
-      button = _this.buttons[i];
-      if (button.shortcut && button.shortcut(evt)) {
-        evt.preventDefault();
-        button.action();
+        ret = await this.doc.save(this.textarea.value);
+      } catch (err) {
+        this.showMessage(err.message, 'error');
         return;
       }
+      if (!ret) return;
+      let file = '/' + ret.key;
+      if (ret.language) file += '.' + this.lookupExtensionByType(ret.language);
+      window.history.pushState(null, this.appName + '-' + ret.key, file);
+      this.showDocument(ret);
     }
-  });
-};
 
-///// Tab behavior in the textarea - 2 spaces per tab
-$(function() {
-
-  $('textarea').keydown(function(evt) {
-    if (evt.keyCode === 9) {
-      evt.preventDefault();
-      var myValue = '  ';
-      // http://stackoverflow.com/questions/946534/insert-text-into-textarea-with-jquery
-      // For browsers like Internet Explorer
-      if (document.selection) {
-        this.focus();
-        var sel = document.selection.createRange();
-        sel.text = myValue;
-        this.focus();
-      }
-      // Mozilla and Webkit
-      else if (this.selectionStart || this.selectionStart == '0') {
-        var startPos = this.selectionStart;
-        var endPos = this.selectionEnd;
-        var scrollTop = this.scrollTop;
-        this.value = this.value.substring(0, startPos) + myValue +
-          this.value.substring(endPos,this.value.length);
-        this.focus();
-        this.selectionStart = startPos + myValue.length;
-        this.selectionEnd = startPos + myValue.length;
-        this.scrollTop = scrollTop;
-      }
-      else {
-        this.value += myValue;
-        this.focus();
-      }
+    configureButtons() {
+      this.buttons = [
+        {
+          el: $('#box2 .save'),
+          label: 'Save',
+          shortcutDescription: 'control + s',
+          shortcut: (evt) => (evt.ctrlKey || evt.metaKey) && evt.key.toLowerCase() === 's',
+          action: () => {
+            if (this.textarea.value.trim() !== '') this.lockDocument();
+          }
+        },
+        {
+          el: $('#box2 .new'),
+          label: 'New',
+          shortcutDescription: 'control + n',
+          shortcut: (evt) => evt.ctrlKey && evt.key.toLowerCase() === 'n',
+          action: () => this.newDocument(!this.doc.key)
+        },
+        {
+          el: $('#box2 .duplicate'),
+          label: 'Duplicate & Edit',
+          shortcutDescription: 'control + d',
+          shortcut: (evt) => this.doc.locked && evt.ctrlKey && evt.key.toLowerCase() === 'd',
+          action: () => this.duplicateDocument()
+        },
+        {
+          el: $('#box2 .raw'),
+          label: 'Just Text',
+          shortcutDescription: 'control + shift + r',
+          shortcut: (evt) => evt.ctrlKey && evt.shiftKey && evt.key.toLowerCase() === 'r',
+          action: () => {
+            window.location.href = '/raw/' + encodeURIComponent(this.doc.key);
+          }
+        },
+        {
+          el: $('#box2 .twitter'),
+          label: 'Twitter',
+          shortcutDescription: 'control + shift + t',
+          shortcut: (evt) => this.options.twitter && this.doc.locked &&
+            evt.shiftKey && evt.ctrlKey && evt.key.toLowerCase() === 't',
+          action: () => {
+            const url = 'https://twitter.com/intent/tweet?url=' + encodeURIComponent(window.location.href);
+            window.open(url, '_blank', 'noopener,noreferrer');
+          }
+        }
+      ];
+      for (const button of this.buttons) this.configureButton(button);
     }
-  });
 
-});
+    configureButton(options) {
+      const box3 = $('#box3');
+      const pointer = $('#pointer');
+      options.el.addEventListener('click', (evt) => {
+        evt.preventDefault();
+        if (options.el.classList.contains('enabled')) options.action();
+      });
+      options.el.addEventListener('mouseenter', () => {
+        $('#box3 .label').textContent = options.label;
+        $('#box3 .shortcut').textContent = options.shortcutDescription || '';
+        box3.hidden = false;
+        options.el.appendChild(pointer);
+        pointer.hidden = false;
+      });
+      options.el.addEventListener('mouseleave', () => {
+        box3.hidden = true;
+        pointer.hidden = true;
+      });
+    }
+
+    configureShortcuts() {
+      document.body.addEventListener('keydown', (evt) => {
+        for (const button of this.buttons) {
+          if (button.shortcut(evt)) {
+            evt.preventDefault();
+            button.action();
+            return;
+          }
+        }
+      });
+    }
+
+    // Tab behavior in the textarea - 2 spaces per tab
+    configureTabKey() {
+      this.textarea.addEventListener('keydown', (evt) => {
+        if (evt.key !== 'Tab' || evt.shiftKey || evt.ctrlKey || evt.metaKey || evt.altKey) return;
+        evt.preventDefault();
+        const ta = this.textarea;
+        ta.setRangeText('  ', ta.selectionStart, ta.selectionEnd, 'end');
+      });
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const app = new Haste('hastebin', { twitter: true });
+
+    const route = () => {
+      const path = window.location.pathname;
+      if (path === '/') app.newDocument(true);
+      else app.loadDocument(decodeURIComponent(path.substring(1)));
+    };
+
+    window.addEventListener('popstate', route);
+    route();
+  });
+})();

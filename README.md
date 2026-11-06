@@ -1,233 +1,166 @@
 # Haste
 
-Haste is an open-source pastebin software written in node.js, which is easily
-installable in any network.  It can be backed by either redis or filesystem,
-and has a very easy adapter interface for other stores.  A publicly available
-version can be found at [hastebin.com](http://hastebin.com)
+![haste-server: dark, syntax-highlighted paste view with the classic hastebin toolbar](docs/screenshot.png)
 
-Major design objectives:
+Haste is an open-source pastebin server written in Node.js. It is easy to
+install in any network and can be backed by the filesystem, Redis, Postgres or
+Memcached.
+
+Design objectives:
 
 * Be really pretty
 * Be really simple
 * Be easy to set up and use
 
-Haste works really well with a little utility called
-[haste-client](https://github.com/seejohnrun/haste-client), allowing you
-to do things like:
+This is a maintained revival of the original
+`seejohnrun/haste-server` (the software behind hastebin) by John Crepezzi,
+which is no longer available on GitHub. Version 2 is a security-focused
+modernisation; the UI, API and storage formats are unchanged, so it is a
+drop-in replacement for existing installations (including the
+`rlister/hastebin` Docker image).
 
-`cat something | haste`
+## Usage
 
-which will output a URL to share containing the contents of `cat something`'s
-STDOUT.  Check the README there for more details and usages.
+```sh
+# from the console
+cat something | curl --data-binary @- https://paste.example.com/documents
+# => {"key":"abcdefghij"}
 
-## Tested Browsers
-
-* Firefox 8
-* Chrome 17
-* Safari 5.3
-
-## Installation
-
-1.  Download the package, and expand it
-2.  Explore the settings inside of config.js, but the defaults should be good
-3.  `npm install`
-4.  `npm start`
-
-## Settings
-
-* `host` - the host the server runs on (default localhost)
-* `port` - the port the server runs on (default 7777)
-* `keyLength` - the length of the keys to user (default 10)
-* `maxLength` - maximum length of a paste (default none)
-* `staticMaxAge` - max age for static assets (86400)
-* `recompressStaticAssets` - whether or not to compile static js assets (true)
-* `documents` - static documents to serve (ex: http://hastebin.com/about.com)
-  in addition to static assets.  These will never expire.
-* `storage` - storage options (see below)
-* `logging` - logging preferences
-* `keyGenerator` - key generator options (see below)
-* `rateLimits` - settings for rate limiting (see below)
-
-## Rate Limiting
-
-When present, the `rateLimits` option enables built-in rate limiting courtesy
-of `connect-ratelimit`.  Any of the options supported by that library can be
-used and set in `config.json`.
-
-See the README for [connect-ratelimit](https://github.com/dharmafly/connect-ratelimit)
-for more information!
-
-## Key Generation
-
-### Phonetic
-
-Attempts to generate phonetic keys, similar to `pwgen`
-
-``` json
-{
-  "type": "phonetic"
-}
+# multipart works too
+curl -F data=@file.txt https://paste.example.com/documents
 ```
 
-### Random
+Clients built for hastebin such as
+[haste-client](https://github.com/toptal/haste-client) keep working.
 
-Generates a random key
+### API
 
-``` json
-{
-  "type": "random",
-  "keyspace": "abcdef"
-}
+| Method | Path              | Description                                   |
+|--------|-------------------|-----------------------------------------------|
+| POST   | `/documents`      | Body (raw or multipart field `data`) → `{"key"}` |
+| GET    | `/documents/:key` | → `{"data", "key"}`                           |
+| GET    | `/raw/:key`       | Plain text                                    |
+| GET    | `/:key[.ext]`     | Web UI, `ext` selects syntax highlighting     |
+
+## Running
+
+### Docker
+
+```sh
+docker build -t haste-server .
+docker run -d -p 7777:7777 -v haste-data:/app/data haste-server
 ```
 
-The _optional_ keySpace argument is a string of acceptable characters
-for the key.
+or `docker compose up -d` with the included `docker-compose.yml`.
 
-## Storage
+The container runs as the unprivileged `node` user (uid 1000).
 
-### File
+### Node.js
 
-To use file storage (the default) change the storage section in `config.js` to
-something like:
+Requires Node.js 22 or newer.
 
-``` json
-{
-  "path": "./data",
-  "type": "file"
-}
+```sh
+npm ci --omit=dev
+npm start
 ```
 
-where `path` represents where you want the files stored.
+## Migrating from `rlister/hastebin`
 
-File storage currently does not support paste expiration, you can follow [#191](https://github.com/seejohnrun/haste-server/issues/191) for status updates.
+* Same port (7777), same working directory (`/app`), same data directory
+  (`/app/data`) and the same environment variables, so you can swap the image.
+* The file store keeps the original on-disk format; existing pastes remain
+  readable.
+* The old image ran as root, the new one does not. Fix ownership of an existing
+  data volume once:
 
-### Redis
+  ```sh
+  docker run --rm -v <your-volume>:/data alpine chown -R 1000:1000 /data
+  ```
 
-To use redis storage you must install the `redis` package in npm, and have
-`redis-server` running on the machine.
+  The server refuses to start with a clear error if it cannot write there.
+* Behind a reverse proxy, set `TRUST_PROXY=1` so rate limiting sees real client
+  IPs instead of the proxy's.
 
-`npm install redis`
+## Configuration
 
-Once you've done that, your config section should look like:
+Settings come from `config.js` (JSON; override the path with `CONFIG_FILE`),
+then environment variables. Old config files (winston array logging,
+`connect-ratelimit` categories) are still understood.
 
-``` json
-{
-  "type": "redis",
-  "host": "localhost",
-  "port": 6379,
-  "db": 2
-}
+| Setting           | Env var                         | Default         | |
+|-------------------|---------------------------------|-----------------|---|
+| `host`            | `HOST`                          | `0.0.0.0`       | |
+| `port`            | `PORT`                          | `7777`          | |
+| `keyLength`       | `KEY_LENGTH`                    | `10`            | |
+| `maxLength`       | `MAX_LENGTH`                    | `400000`        | max paste size in characters (as in 1.x), `0` = unlimited |
+| `staticMaxAge`    | `STATIC_MAX_AGE`                | `86400`         | seconds |
+| `trustProxy`      | `TRUST_PROXY`                   | `false`         | Express [trust proxy](https://expressjs.com/en/guide/behind-proxies.html) value |
+| `logging.level`   | `LOGGING_LEVEL`                 | `info`          | `error`, `warn`, `info`, `verbose`, `debug` |
+| `logging.format`  | `LOGGING_FORMAT`                | `text`          | `text` or `json` |
+| `keyGenerator`    | `KEY_GENERATOR_TYPE`, `KEY_GENERATOR_KEYSPACE`, `KEY_GENERATOR_PATH` | `phonetic` | see below |
+| `rateLimits`      | `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS` | 500 / 60000 ms per IP | `RATE_LIMIT_MAX=0` disables |
+| `storage`         | `STORAGE_*`                     | `file`          | see below |
+| `documents`       | `DOCUMENTS=about=./about.md,...` | `about`        | static documents that never expire |
+
+`RECOMPRESS_STATIC_ASSETS`, `LOGGING_TYPE` and `LOGGING_COLORIZE` from the old
+image are accepted and ignored.
+
+### Key generators
+
+* `phonetic` (default) – pronounceable keys like `kenesowiyu`
+* `random` – characters from `keyspace` (default `A-Za-z0-9`)
+* `dictionary` – `keyLength` words from the file at `path`
+
+All generators use a cryptographically secure RNG.
+
+### Storage
+
+| Type        | Options (`STORAGE_*` env vars)                                            | Expiration |
+|-------------|---------------------------------------------------------------------------|------------|
+| `file`      | `path`                                                                    | not supported |
+| `redis`     | `url` (or `REDIS_URL`), `host`, `port`, `db` (default 2), `username`, `password`, `expire` | pushed forward on each view |
+| `postgres`  | `url` (or `DATABASE_URL`), `expire`                                       | pushed forward on each view; expired rows are purged hourly |
+| `memcached` | `host`, `port`, `username`, `password`, `expire`                          | fixed from creation |
+
+`expire` is in seconds (default 2592000 = 30 days). The Postgres table is
+created automatically.
+
+The RethinkDB store was removed: it was broken and its driver is unmaintained.
+
+## Security
+
+Changes in 2.0 compared to the 2018 code:
+
+* All dependencies updated (Express 5, busboy 1, winston 3, redis 5, pg 8,
+  highlight.js 11); jQuery removed. `npm audit` is clean.
+* Upload size is enforced while streaming instead of after buffering the whole
+  body.
+* Keys are validated and generated with `crypto.randomInt`.
+* Strict Content-Security-Policy, `nosniff`, `X-Frame-Options` and friends.
+  `/raw` responses are sandboxed plain text.
+* No third-party CDN; all assets are served locally.
+* Docker image runs as non-root; Dependabot and CI with `npm audit` keep it
+  current.
+
+Please report vulnerabilities privately via GitHub security advisories.
+
+## Development
+
+```sh
+npm install
+npm test          # REDIS_URL=redis://localhost:6379/15 npm test also runs redis tests
+npm run lint
 ```
 
-You can also set an `expire` option to the number of seconds to expire keys in.
-This is off by default, but will constantly kick back expirations on each view
-or post.
+## Authors
 
-All of which are optional except `type` with very logical default values.
-
-If your Redis server is configured for password authentification, use the `password` field.
-
-### Postgres
-
-To use postgres storage you must install the `pg` package in npm
-
-`npm install pg`
-
-Once you've done that, your config section should look like:
-
-``` json
-{
-  "type": "postgres",
-  "connectionUrl": "postgres://user:password@host:5432/database"
-}
-```
-
-You can also just set the environment variable for `DATABASE_URL` to your database connection url.
-
-You will have to manually add a table to your postgres database:
-
-`create table entries (id serial primary key, key varchar(255) not null, value text not null, expiration int, unique(key));`
-
-You can also set an `expire` option to the number of seconds to expire keys in.
-This is off by default, but will constantly kick back expirations on each view
-or post.
-
-All of which are optional except `type` with very logical default values.
-
-### Memcached
-
-To use memcached storage you must install the `memcache` package via npm
-
-`npm install memcache`
-
-Once you've done that, your config section should look like:
-
-``` json
-{
-  "type": "memcached",
-  "host": "127.0.0.1",
-  "port": 11211
-}
-```
-
-You can also set an `expire` option to the number of seconds to expire keys in.
-This behaves just like the redis expirations, but does not push expirations
-forward on GETs.
-
-All of which are optional except `type` with very logical default values.
-
-### RethinkDB
-
-To use the RethinkDB storage system, you must install the `rethinkdbdash` package via npm
-
-`npm install rethinkdbdash`
-
-Once you've done that, your config section should look like this:
-
-``` json
-{
-  "type": "rethinkdb",
-  "host": "127.0.0.1",
-  "port": 28015,
-  "db": "haste"
-}
-```
-
-In order for this to work, the database must be pre-created before the script is ran.
-Also, you must create an `uploads` table, which will store all the data for uploads.
-
-You can optionally add the `user` and `password` properties to use a user system.
-
-## Author
-
-John Crepezzi <john.crepezzi@gmail.com>
+Original code by John Crepezzi <john.crepezzi@gmail.com>, key design by Brian
+Dawson <bridawson@gmail.com>.
 
 ## License
 
-(The MIT License)
+MIT, see [LICENSE](LICENSE).
 
-Copyright © 2011-2012 John Crepezzi
+### Other components
 
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the ‘Software’), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-of the Software, and to permit persons to whom the Software is furnished to do
-so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED ‘AS IS’, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE
-
-### Other components:
-
-* jQuery: MIT/GPL license
-* highlight.js: Copyright © 2006, Ivan Sagalaev
-* highlightjs-coffeescript: WTFPL - Copyright © 2011, Dmytrii Nagirniak
+* highlight.js: BSD-3-Clause, © 2006 Ivan Sagalaev and contributors

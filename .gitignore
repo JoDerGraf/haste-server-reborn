@@ -3,4 +3,7 @@ node_modules
 *.swp
 *.swo
 data
-*.DS_Store
+.DS_Store
+graphify-out
+.playwright-mcp
+.idea

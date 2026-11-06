@@ -19,7 +19,11 @@ Most of the time I want to show you some text, it's coming from my current
 console session.  We should make it really easy to take code from the console
 and send it to people.
 
-`cat something | haste` # https://hastebin.com/1238193
+`cat something | haste` # https://your-haste-server/1238193
+
+Or with plain curl:
+
+`curl --data-binary @file.txt https://your-haste-server/documents`
 
 You can even take this a step further, and cut out the last step of copying the
 URL with:
@@ -43,7 +47,7 @@ and without notice.
 
 ## Privacy
 
-While the contents of hastebin.com are not directly crawled by any search robot
+While the contents of this server are not directly crawled by any search robot
 that obeys "robots.txt", there should be no great expectation of privacy.  Post
 things at your own risk. Not responsible for any loss of data or removed
 pastes.
@@ -52,8 +56,8 @@ pastes.
 
 Haste can easily be installed behind your network, and it's all open source!
 
-* [haste-client](https://github.com/seejohnrun/haste-client)
-* [haste-server](https://github.com/seejohnrun/haste-server)
+* [haste-client](https://github.com/toptal/haste-client)
+* [haste-server-reborn](https://github.com/JoDerGraf/haste-server-reborn)
 
 ## Author
 

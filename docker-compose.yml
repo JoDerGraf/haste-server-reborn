@@ -1,0 +1,29 @@
+# File storage (default). For redis, uncomment the redis service and the
+# STORAGE_* variables.
+services:
+  haste:
+    build: .
+    image: haste-server:latest
+    restart: unless-stopped
+    ports:
+      - "7777:7777"
+    environment:
+      STORAGE_TYPE: file
+      # STORAGE_TYPE: redis
+      # STORAGE_HOST: redis
+      # TRUST_PROXY: "1"   # set when running behind a reverse proxy
+    volumes:
+      - haste-data:/app/data
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp"]
+  # redis:
+  #   image: redis:7-alpine
+  #   restart: unless-stopped
+  #   volumes:
+  #     - redis-data:/data
+
+volumes:
+  haste-data:
+  # redis-data:

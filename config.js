@@ -9,34 +9,25 @@
 
   "staticMaxAge": 86400,
 
-  "recompressStaticAssets": true,
+  "trustProxy": false,
 
-  "logging": [
-    {
-      "level": "verbose",
-      "type": "Console",
-      "colorize": true
-    }
-  ],
+  "logging": {
+    "level": "info",
+    "format": "text"
+  },
 
   "keyGenerator": {
     "type": "phonetic"
   },
 
   "rateLimits": {
-    "categories": {
-      "normal": {
-        "totalRequests": 500,
-        "every": 60000
-      }
-    }
+    "windowMs": 60000,
+    "max": 500
   },
 
   "storage": {
-    "type": "redis",
-    "host": "0.0.0.0",
-    "port": 6379,
-    "db": 2,
+    "type": "file",
+    "path": "./data",
     "expire": 2592000
   },
 

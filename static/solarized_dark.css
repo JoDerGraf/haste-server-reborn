@@ -28,6 +28,7 @@ Orginal Style from ethanschoonover.com/solarized (c) Jeremy Hull <sourdrums@gmai
 .hljs-number,
 .hljs-string,
 .hljs-meta .hljs-meta-string,
+.hljs-meta .hljs-string,
 .hljs-literal,
 .hljs-doctag,
 .hljs-regexp {
