@@ -2,8 +2,8 @@
 # STORAGE_* variables.
 services:
   haste:
-    build: .
-    image: haste-server:latest
+    # build: .   # to build from source instead
+    image: jodergraf/haste-server-reborn:2
     restart: unless-stopped
     ports:
       - "7777:7777"

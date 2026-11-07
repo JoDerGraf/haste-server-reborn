@@ -47,9 +47,14 @@ Clients built for hastebin such as
 ### Docker
 
 ```sh
-docker build -t haste-server .
-docker run -d -p 7777:7777 -v haste-data:/app/data haste-server
+docker run -d -p 7777:7777 -v haste-data:/app/data jodergraf/haste-server-reborn:2
 ```
+
+Images for amd64 and arm64 are published to
+[Docker Hub](https://hub.docker.com/r/jodergraf/haste-server-reborn) and
+`ghcr.io/jodergraf/haste-server-reborn`. Tags: `latest`, `2`, `2.0`,
+`2.0.0` (releases) and `edge` (main branch). To build yourself:
+`docker build -t haste-server .`
 
 or `docker compose up -d` with the included `docker-compose.yml`.
 
